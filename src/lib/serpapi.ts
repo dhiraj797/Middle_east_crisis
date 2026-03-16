@@ -10,17 +10,18 @@ async function serpSearch(query: string, params: Record<string, string> = {}) {
     url.searchParams.set(k, v);
   }
 
-  const res = await fetch(url.toString(), { next: { revalidate: 3600 } });
+  const res = await fetch(url.toString(), { next: { revalidate: 1800 } });
   if (!res.ok) throw new Error(`SerpAPI error: ${res.status}`);
   return res.json();
 }
 
 export async function fetchMiddleEastNews(): Promise<NewsItem[]> {
   try {
-    const data = await serpSearch('Middle East crisis latest developments', {
+    const data = await serpSearch('Middle East crisis war conflict today', {
       engine: 'google_news',
       gl: 'in',
       hl: 'en',
+      topic_token: '',
     });
 
     const articles = data.news_results || [];
@@ -39,7 +40,7 @@ export async function fetchMiddleEastNews(): Promise<NewsItem[]> {
 
 export async function fetchIndiaImpactNews(): Promise<NewsItem[]> {
   try {
-    const data = await serpSearch('Middle East crisis impact on India economy oil', {
+    const data = await serpSearch('Middle East crisis impact India oil economy today', {
       engine: 'google_news',
       gl: 'in',
       hl: 'en',
@@ -62,34 +63,68 @@ export async function fetchIndiaImpactNews(): Promise<NewsItem[]> {
 
 export async function fetchMarketData(): Promise<MarketData> {
   try {
+    // Use Google Finance engine for accurate real-time prices
     const queries = [
-      serpSearch('Brent crude oil price today', { engine: 'google' }),
-      serpSearch('Sensex today', { engine: 'google', gl: 'in' }),
-      serpSearch('USD INR exchange rate today', { engine: 'google', gl: 'in' }),
-      serpSearch('Gold price today USD', { engine: 'google' }),
-      serpSearch('WTI crude oil price today', { engine: 'google' }),
-      serpSearch('Natural gas price today', { engine: 'google' }),
+      serpSearch('BZ=F', { engine: 'google_finance', hl: 'en' }).catch(() => null),
+      serpSearch('CL=F', { engine: 'google_finance', hl: 'en' }).catch(() => null),
+      serpSearch('NG=F', { engine: 'google_finance', hl: 'en' }).catch(() => null),
+      serpSearch('SENSEX:INDEXBOM', { engine: 'google_finance', hl: 'en' }).catch(() => null),
+      serpSearch('USD/INR', { engine: 'google_finance', hl: 'en' }).catch(() => null),
+      serpSearch('GC=F', { engine: 'google_finance', hl: 'en' }).catch(() => null),
     ];
 
-    const [brentData, sensexData, forexData, goldData, wtiData, natGasData] = await Promise.all(queries);
+    const [brentData, wtiData, natGasData, sensexData, forexData, goldData] = await Promise.all(queries);
 
     return {
-      brentCrude: extractPrice(brentData, 'Brent Crude'),
-      wtiCrude: extractPrice(wtiData, 'WTI Crude'),
-      naturalGas: extractPrice(natGasData, 'Natural Gas'),
-      sensex: extractPrice(sensexData, 'Sensex'),
-      inrUsd: extractPrice(forexData, 'INR/USD'),
-      gold: extractPrice(goldData, 'Gold'),
+      brentCrude: extractFinancePrice(brentData, 'Brent Crude'),
+      wtiCrude: extractFinancePrice(wtiData, 'WTI Crude'),
+      naturalGas: extractFinancePrice(natGasData, 'Natural Gas'),
+      sensex: extractFinancePrice(sensexData, 'Sensex'),
+      inrUsd: extractFinancePrice(forexData, 'INR/USD'),
+      gold: extractFinancePrice(goldData, 'Gold'),
     };
   } catch (error) {
     console.error('Error fetching market data:', error);
-    return getDefaultMarketData();
+    // Fallback: try regular Google search
+    return fetchMarketDataFallback();
   }
 }
 
-function extractPrice(data: Record<string, unknown>, label: string): { price: string; change: string; direction: 'up' | 'down' | 'flat' } {
+function extractFinancePrice(
+  data: Record<string, unknown> | null,
+  label: string
+): { price: string; change: string; direction: 'up' | 'down' | 'flat' } {
+  if (!data) return { price: 'N/A', change: '', direction: 'flat' };
+
   try {
-    // Try answer box first
+    // Google Finance engine returns summary with price info
+    const summary = data.summary as Record<string, unknown> | undefined;
+    if (summary) {
+      const price = summary.price || summary.extracted_price || '';
+      const change = summary.price_change || summary.percentage || '';
+      const pctChange = summary.price_change_percentage || summary.percent_change || '';
+      const priceStr = price.toString();
+      const changeStr = change ? `${change} (${pctChange})` : pctChange ? pctChange.toString() : '';
+
+      if (priceStr) {
+        return {
+          price: priceStr,
+          change: changeStr,
+          direction: changeStr.includes('-') ? 'down' : changeStr.includes('+') || (Number(change) > 0) ? 'up' : 'flat',
+        };
+      }
+    }
+
+    // Try market_data or finance_results
+    const marketInfo = (data.market_data || data.finance_results || data.markets) as Record<string, unknown> | undefined;
+    if (marketInfo) {
+      const price = marketInfo.current_price || marketInfo.price || '';
+      if (price) {
+        return { price: price.toString(), change: '', direction: 'flat' };
+      }
+    }
+
+    // Fallback: answer_box
     const answerBox = data.answer_box as Record<string, unknown> | undefined;
     if (answerBox) {
       const price = (answerBox.answer || answerBox.result || answerBox.snippet || '') as string;
@@ -103,25 +138,16 @@ function extractPrice(data: Record<string, unknown>, label: string): { price: st
       }
     }
 
-    // Try knowledge graph
+    // Fallback: knowledge graph
     const kg = data.knowledge_graph as Record<string, unknown> | undefined;
     if (kg) {
-      const price = (kg.price || kg.value || '') as string;
+      const price = (kg.price || kg.value || kg.header || '') as string;
       if (price) {
         return { price: price.toString(), change: '', direction: 'flat' };
       }
     }
 
-    // Try organic results snippet
-    const organic = (data.organic_results || []) as Record<string, unknown>[];
-    if (organic.length > 0) {
-      const snippet = (organic[0].snippet || '') as string;
-      const priceMatch = snippet.match(/\$?[\d,.]+/);
-      if (priceMatch) {
-        return { price: priceMatch[0], change: '', direction: 'flat' };
-      }
-    }
-
+    console.log(`No price found for ${label}, data keys:`, Object.keys(data));
     return { price: 'N/A', change: '', direction: 'flat' };
   } catch {
     console.error(`Error extracting price for ${label}`);
@@ -129,9 +155,36 @@ function extractPrice(data: Record<string, unknown>, label: string): { price: st
   }
 }
 
+async function fetchMarketDataFallback(): Promise<MarketData> {
+  try {
+    // Fallback using regular Google search with tbs for recent results
+    const queries = [
+      serpSearch('Brent crude oil price USD today', { engine: 'google', gl: 'us' }),
+      serpSearch('WTI crude oil price USD today', { engine: 'google', gl: 'us' }),
+      serpSearch('Natural gas price USD today', { engine: 'google', gl: 'us' }),
+      serpSearch('BSE Sensex index today', { engine: 'google', gl: 'in' }),
+      serpSearch('USD INR exchange rate', { engine: 'google', gl: 'in' }),
+      serpSearch('Gold price per ounce USD today', { engine: 'google', gl: 'us' }),
+    ];
+
+    const [brent, wti, gas, sensex, forex, gold] = await Promise.all(queries);
+
+    return {
+      brentCrude: extractFinancePrice(brent, 'Brent'),
+      wtiCrude: extractFinancePrice(wti, 'WTI'),
+      naturalGas: extractFinancePrice(gas, 'NatGas'),
+      sensex: extractFinancePrice(sensex, 'Sensex'),
+      inrUsd: extractFinancePrice(forex, 'INRUSD'),
+      gold: extractFinancePrice(gold, 'Gold'),
+    };
+  } catch {
+    return getDefaultMarketData();
+  }
+}
+
 export async function fetchShippingNews(): Promise<ShippingUpdate[]> {
   try {
-    const data = await serpSearch('Red Sea shipping disruption Suez Canal Houthi latest', {
+    const data = await serpSearch('Red Sea shipping Suez Canal Houthi attacks today', {
       engine: 'google_news',
       gl: 'in',
       hl: 'en',

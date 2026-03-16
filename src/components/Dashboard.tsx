@@ -197,7 +197,7 @@ export default function Dashboard() {
         </div>
 
         {/* Strategic Map */}
-        <MapComponent />
+        <MapComponent news={data.news} />
 
         {/* News + Shipping Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
