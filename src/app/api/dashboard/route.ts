@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/session';
 import { fetchMiddleEastNews, fetchIndiaImpactNews, fetchMarketData, fetchShippingNews } from '@/lib/serpapi';
 import { generateAISummary } from '@/lib/claude';
 import { DashboardData } from '@/types/dashboard';
@@ -7,11 +6,6 @@ import { DashboardData } from '@/types/dashboard';
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  const session = await getSession();
-  if (!session.isAuthenticated) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
   try {
     const [news, indiaNews, markets, shipping] = await Promise.all([
       fetchMiddleEastNews(),

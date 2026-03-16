@@ -50,10 +50,6 @@ export default function Dashboard() {
     setLoading(true);
     try {
       const res = await fetch('/api/dashboard');
-      if (res.status === 401) {
-        window.location.href = '/login';
-        return;
-      }
       if (!res.ok) throw new Error('Failed to fetch');
       const d = await res.json();
       setData(d);
